@@ -20,6 +20,7 @@ cd UI_DEEPFAKE_DETECTION
 Choose the command that matches your environment to start a local development server:
 
 Option A: Using Node.js (Highly Recommended)
+npm install
 npm run dev
 
 
