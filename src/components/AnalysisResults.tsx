@@ -1,0 +1,408 @@
+import { useState, useEffect } from 'react';
+import { ArrowLeft, Shield, AlertTriangle, CheckCircle, Clock, Activity, Eye, Volume2, Clock3, Database, Award, Download, FileText } from 'lucide-react';
+import { supabase, Analysis, MediaFile, DetectionIndicator, ContentCertificate } from '../lib/supabase';
+
+type AnalysisResultsProps = {
+  analysisId: string;
+  onBack: () => void;
+};
+
+export function AnalysisResults({ analysisId, onBack }: AnalysisResultsProps) {
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [mediaFile, setMediaFile] = useState<MediaFile | null>(null);
+  const [indicators, setIndicators] = useState<DetectionIndicator[]>([]);
+  const [certificate, setCertificate] = useState<ContentCertificate | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadAnalysisData();
+    const interval = setInterval(() => {
+      if (analysis?.status === 'processing' || analysis?.status === 'pending') {
+        loadAnalysisData();
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [analysisId]);
+
+  const loadAnalysisData = async () => {
+    try {
+      const { data: analysisData, error: analysisError } = await supabase
+        .from('analyses')
+        .select('*')
+        .eq('id', analysisId)
+        .single();
+
+      if (analysisError) throw analysisError;
+      setAnalysis(analysisData);
+
+      const { data: mediaData, error: mediaError } = await supabase
+        .from('media_files')
+        .select('*')
+        .eq('id', analysisData.media_file_id)
+        .single();
+
+      if (mediaError) throw mediaError;
+      setMediaFile(mediaData);
+
+      if (analysisData.status === 'completed') {
+        const { data: indicatorsData } = await supabase
+          .from('detection_indicators')
+          .select('*')
+          .eq('analysis_id', analysisId)
+          .order('severity', { ascending: false });
+
+        setIndicators(indicatorsData || []);
+
+        const { data: certData } = await supabase
+          .from('content_certificates')
+          .select('*')
+          .eq('media_file_id', analysisData.media_file_id)
+          .maybeSingle();
+
+        setCertificate(certData);
+      }
+    } catch (error) {
+      console.error('Error loading analysis data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getTrustScore = () => {
+    if (!analysis?.confidence_score) return null;
+    if (analysis.is_authentic) return analysis.confidence_score;
+    return 100 - analysis.confidence_score;
+  };
+
+  const getIndicatorIcon = (type: string) => {
+    switch (type) {
+      case 'visual_artifact':
+        return <Eye className="w-5 h-5" />;
+      case 'audio_inconsistency':
+        return <Volume2 className="w-5 h-5" />;
+      case 'temporal_anomaly':
+        return <Clock3 className="w-5 h-5" />;
+      case 'metadata_mismatch':
+        return <Database className="w-5 h-5" />;
+      default:
+        return <Activity className="w-5 h-5" />;
+    }
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'critical':
+        return 'text-red-400 bg-red-900/30 border-red-500/50';
+      case 'high':
+        return 'text-orange-400 bg-orange-900/30 border-orange-500/50';
+      case 'medium':
+        return 'text-yellow-400 bg-yellow-900/30 border-yellow-500/50';
+      default:
+        return 'text-blue-400 bg-blue-900/30 border-blue-500/50';
+    }
+  };
+
+  const generateReport = () => {
+    if (!analysis || !mediaFile) return;
+
+    const trustScore = getTrustScore();
+    const reportContent = `
+DEEPFAKE DETECTION ANALYSIS REPORT
+═══════════════════════════════════════════════════════════
+
+Media File: ${mediaFile.file_name}
+Analysis ID: ${analysis.id}
+Date: ${new Date(analysis.created_at).toLocaleString()}
+Processing Time: ${analysis.processing_time_ms}ms
+
+TRUST ASSESSMENT
+─────────────────────────────────────────────────────────
+Trust Score: ${trustScore?.toFixed(1)}%
+Status: ${analysis.is_authentic ? 'AUTHENTIC' : 'MANIPULATED'}
+Confidence: ${analysis.confidence_score?.toFixed(1)}%
+
+${indicators.length > 0 ? `
+DETECTION INDICATORS (${indicators.length} found)
+─────────────────────────────────────────────────────────
+${indicators.map((ind, i) => `
+${i + 1}. ${ind.description}
+   Type: ${ind.indicator_type}
+   Category: ${ind.category}
+   Severity: ${ind.severity.toUpperCase()}
+   Confidence: ${ind.confidence.toFixed(1)}%
+`).join('')}
+` : 'No manipulation indicators detected.'}
+
+${certificate ? `
+CONTENT CERTIFICATION
+─────────────────────────────────────────────────────────
+Certificate Hash: ${certificate.certificate_hash}
+Type: ${certificate.certificate_type}
+Blockchain Network: ${certificate.blockchain_network}
+${certificate.blockchain_txid ? `Transaction ID: ${certificate.blockchain_txid}` : ''}
+Issued: ${new Date(certificate.created_at).toLocaleString()}
+` : ''}
+
+Model Version: ${analysis.model_version}
+Analysis Type: ${analysis.analysis_type}
+
+This report was generated by TrustGuard AI
+Intelligent Deepfake Detection System
+    `.trim();
+
+    const blob = new Blob([reportContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `analysis-report-${analysis.id}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (!analysis || !mediaFile) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-white text-lg">Analysis not found</p>
+          <button onClick={onBack} className="mt-4 text-blue-400 hover:text-blue-300">
+            Go back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const trustScore = getTrustScore();
+
+  return (
+    <div className="min-h-screen bg-slate-900 py-8 px-4">
+      <div className="max-w-6xl mx-auto">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          Back to Dashboard
+        </button>
+
+        <div className="bg-slate-800 border border-slate-700 rounded-2xl overflow-hidden mb-6">
+          <div className="p-8 border-b border-slate-700">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h1 className="text-3xl font-bold text-white mb-2">{mediaFile.file_name}</h1>
+                <p className="text-slate-400">Analysis ID: {analysis.id}</p>
+                <p className="text-slate-400 text-sm mt-1">
+                  Analyzed on {new Date(analysis.created_at).toLocaleString()}
+                </p>
+              </div>
+              {analysis.status === 'completed' && (
+                <button
+                  onClick={generateReport}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  <Download className="w-5 h-5" />
+                  Export Report
+                </button>
+              )}
+            </div>
+
+            {analysis.status === 'completed' && trustScore !== null ? (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-1">
+                  <div className="relative inline-flex items-center justify-center w-48 h-48">
+                    <svg className="w-full h-full transform -rotate-90">
+                      <circle
+                        cx="96"
+                        cy="96"
+                        r="88"
+                        stroke="currentColor"
+                        strokeWidth="12"
+                        fill="none"
+                        className="text-slate-700"
+                      />
+                      <circle
+                        cx="96"
+                        cy="96"
+                        r="88"
+                        stroke="currentColor"
+                        strokeWidth="12"
+                        fill="none"
+                        strokeDasharray={`${2 * Math.PI * 88}`}
+                        strokeDashoffset={`${2 * Math.PI * 88 * (1 - trustScore / 100)}`}
+                        className={`transition-all ${
+                          trustScore >= 70
+                            ? 'text-green-500'
+                            : trustScore >= 50
+                            ? 'text-yellow-500'
+                            : 'text-red-500'
+                        }`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span
+                        className={`text-5xl font-bold ${
+                          trustScore >= 70
+                            ? 'text-green-400'
+                            : trustScore >= 50
+                            ? 'text-yellow-400'
+                            : 'text-red-400'
+                        }`}
+                      >
+                        {trustScore.toFixed(0)}%
+                      </span>
+                      <span className="text-slate-400 text-sm mt-1">Trust Score</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-2 space-y-4">
+                  <div className="bg-slate-900/50 rounded-xl p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                      <Shield className="w-6 h-6 text-blue-400" />
+                      <h3 className="text-lg font-semibold text-white">Authenticity Assessment</h3>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Status</span>
+                        <span className={`font-medium ${analysis.is_authentic ? 'text-green-400' : 'text-red-400'}`}>
+                          {analysis.is_authentic ? 'Authentic' : 'Manipulated Content Detected'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Confidence</span>
+                        <span className="font-medium text-white">{analysis.confidence_score?.toFixed(1)}%</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Processing Time</span>
+                        <span className="font-medium text-white">{analysis.processing_time_ms}ms</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Model Version</span>
+                        <span className="font-medium text-white">{analysis.model_version}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {analysis.manipulation_types.length > 0 && (
+                    <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-6">
+                      <div className="flex items-center gap-3 mb-3">
+                        <AlertTriangle className="w-6 h-6 text-red-400" />
+                        <h3 className="text-lg font-semibold text-white">Detected Manipulation Types</h3>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {analysis.manipulation_types.map((type) => (
+                          <span
+                            key={type}
+                            className="px-3 py-1 bg-red-900/50 border border-red-500/50 rounded-full text-sm text-red-300"
+                          >
+                            {type.replace(/_/g, ' ').toUpperCase()}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {certificate && (
+                    <div className="bg-green-900/20 border border-green-500/50 rounded-xl p-6">
+                      <div className="flex items-center gap-3 mb-3">
+                        <Award className="w-6 h-6 text-green-400" />
+                        <h3 className="text-lg font-semibold text-white">Content Certificate</h3>
+                      </div>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Hash</span>
+                          <span className="font-mono text-green-400">{certificate.certificate_hash.slice(0, 16)}...</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Network</span>
+                          <span className="text-white">{certificate.blockchain_network}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : analysis.status === 'processing' || analysis.status === 'pending' ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <Clock className="w-16 h-16 text-blue-400 animate-spin mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-white mb-2">Analysis in Progress</h3>
+                  <p className="text-slate-400">Please wait while we analyze your media file...</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <AlertTriangle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-white mb-2">Analysis Failed</h3>
+                  <p className="text-slate-400">An error occurred during analysis</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {indicators.length > 0 && (
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <Activity className="w-6 h-6 text-blue-400" />
+                <h2 className="text-2xl font-bold text-white">Detection Indicators</h2>
+                <span className="px-3 py-1 bg-blue-900/30 text-blue-400 rounded-full text-sm font-medium">
+                  {indicators.length} found
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                {indicators.map((indicator) => (
+                  <div
+                    key={indicator.id}
+                    className={`border rounded-xl p-6 ${getSeverityColor(indicator.severity)}`}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="flex-shrink-0">
+                        {getIndicatorIcon(indicator.indicator_type)}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="text-lg font-semibold text-white">{indicator.description}</h3>
+                          <span className="px-2 py-0.5 bg-slate-900/50 rounded text-xs font-medium uppercase">
+                            {indicator.severity}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-slate-400">Type: </span>
+                            <span className="text-white">{indicator.indicator_type.replace(/_/g, ' ')}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Category: </span>
+                            <span className="text-white">{indicator.category}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Confidence: </span>
+                            <span className="text-white">{indicator.confidence.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
